@@ -2,9 +2,9 @@ import streamlit as st
 import cv2
 import numpy as np
 import time
-
 from PIL import Image
 import io
+import zipfile
 
 st.set_page_config(page_title="🎨 多風格藝術濾鏡轉換系統", page_icon="🎨", layout="wide")
 
@@ -12,17 +12,16 @@ st.markdown("""
 <style>
 .title{text-align:center;font-size:2rem;font-weight:700}
 .sub{text-align:center;color:#888;font-size:0.9rem;margin-bottom:1.5rem}
-.timing{background:#1e3a5f;color:#60a5fa;padding:5px 14px;border-radius:20px;font-size:0.85rem}
+.timing{background:#1e3a5f;color:#60a5fa;padding:4px 12px;border-radius:20px;font-size:0.82rem;display:inline-block}
+.card{background:#18181b;border:1px solid #333;border-radius:12px;padding:12px;margin-bottom:12px}
 </style>""", unsafe_allow_html=True)
 
 st.markdown('<div class="title">🎨 多風格藝術濾鏡轉換系統</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub">第五組專題 · 指導教授：林皇辰 · 日系動漫 / 水彩 / 油畫 / 像素復古</div>', unsafe_allow_html=True)
 
-@st.cache_resource
-
-
-
-
+# ════════════════════════════
+# 濾鏡函式
+# ════════════════════════════
 def analyze_color_tone(img_bgr):
     b_ch=np.mean(img_bgr[:,:,0]); g_ch=np.mean(img_bgr[:,:,1]); r_ch=np.mean(img_bgr[:,:,2])
     hsv=cv2.cvtColor(img_bgr,cv2.COLOR_BGR2HSV).astype(np.float32)
@@ -50,29 +49,20 @@ def apply_japanese_tone(result_bgr, tone_info):
     return cv2.addWeighted(result_bgr,0.65,glow,0.35,0)
 
 def anime_filter(img_bgr):
-    # 純 OpenCV 動漫風：雙邊濾波 + 色彩量化 + 邊緣
-    smooth = img_bgr.copy()
-    for _ in range(2):
-        smooth = cv2.bilateralFilter(smooth, d=9, sigmaColor=75, sigmaSpace=75)
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    blur_gray = cv2.medianBlur(gray, 7)
-    edges = cv2.adaptiveThreshold(
-        blur_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY, blockSize=9, C=4
-    )
-    edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-    data = smooth.reshape((-1, 3)).astype(np.float32)
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
-    _, labels, centers = cv2.kmeans(data, 6, None, criteria, 4, cv2.KMEANS_RANDOM_CENTERS)
-    quantized = centers[labels.flatten()].reshape(smooth.shape).astype(np.uint8)
-    result = cv2.bitwise_and(quantized, edges_bgr)
-    tone_info = analyze_color_tone(img_bgr)
-    result = apply_japanese_tone(result, tone_info)
-    kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
-    result = cv2.filter2D(result, -1, kernel)
-    hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hsv[:,:,1] = np.clip(hsv[:,:,1]*1.3, 0, 255)
-    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    smooth=img_bgr.copy()
+    for _ in range(2): smooth=cv2.bilateralFilter(smooth,d=9,sigmaColor=75,sigmaSpace=75)
+    gray=cv2.cvtColor(img_bgr,cv2.COLOR_BGR2GRAY); blur_gray=cv2.medianBlur(gray,7)
+    edges=cv2.adaptiveThreshold(blur_gray,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,blockSize=9,C=4)
+    edges_bgr=cv2.cvtColor(edges,cv2.COLOR_GRAY2BGR)
+    data=smooth.reshape((-1,3)).astype(np.float32)
+    criteria=(cv2.TERM_CRITERIA_EPS+cv2.TERM_CRITERIA_MAX_ITER,20,1.0)
+    _,labels,centers=cv2.kmeans(data,6,None,criteria,4,cv2.KMEANS_RANDOM_CENTERS)
+    quantized=centers[labels.flatten()].reshape(smooth.shape).astype(np.uint8)
+    result=cv2.bitwise_and(quantized,edges_bgr)
+    tone_info=analyze_color_tone(img_bgr); result=apply_japanese_tone(result,tone_info)
+    kernel=np.array([[0,-1,0],[-1,5,-1],[0,-1,0]]); result=cv2.filter2D(result,-1,kernel)
+    hsv=cv2.cvtColor(result,cv2.COLOR_BGR2HSV).astype(np.float32); hsv[:,:,1]=np.clip(hsv[:,:,1]*1.3,0,255)
+    return cv2.cvtColor(hsv.astype(np.uint8),cv2.COLOR_HSV2BGR)
 
 def watercolor_filter(img_bgr):
     smooth=img_bgr.copy()
@@ -136,49 +126,118 @@ def pixel_filter(img_bgr,pixel_size=8):
     for x in range(0,w,pixel_size): cv2.line(result_bgr,(x,0),(x,h),(0,0,0),1)
     return result_bgr
 
+def apply_filter(img_bgr, style, pixel_size=8):
+    if   style=="🌸 日系動漫": return anime_filter(img_bgr)
+    elif style=="🖌️ 水彩風":   return watercolor_filter(img_bgr)
+    elif style=="🖼️ 油畫風":   return oil_filter(img_bgr)
+    else:                       return pixel_filter(img_bgr, pixel_size)
+
 def bgr2pil(img): return Image.fromarray(cv2.cvtColor(img,cv2.COLOR_BGR2RGB))
 def to_bytes(pil):
     buf=io.BytesIO(); pil.save(buf,format="JPEG",quality=92); return buf.getvalue()
 
-# ── UI ──
-col_l, col_r = st.columns([1,1])
+def load_image(uploaded_file):
+    file_bytes=np.frombuffer(uploaded_file.read(),np.uint8)
+    img_bgr=cv2.imdecode(file_bytes,cv2.IMREAD_COLOR)
+    h,w=img_bgr.shape[:2]
+    if w>512: img_bgr=cv2.resize(img_bgr,(512,int(h*512/w)),interpolation=cv2.INTER_AREA)
+    return img_bgr
 
-with col_l:
-    uploaded = st.file_uploader("📂 上傳圖片", type=["jpg","jpeg","png","webp"])
-    style = st.radio("選擇風格", ["🌸 日系動漫","🖌️ 水彩風","🖼️ 油畫風","👾 像素復古"], horizontal=True)
+# ════════════════════════════
+# UI
+# ════════════════════════════
+with st.sidebar:
+    st.markdown("### ⚙️ 設定")
+    uploaded_files = st.file_uploader(
+        "📂 上傳圖片（最多 10 張）",
+        type=["jpg","jpeg","png","webp"],
+        accept_multiple_files=True
+    )
+    if uploaded_files and len(uploaded_files) > 10:
+        st.warning("最多只能上傳 10 張，超過的將被忽略")
+        uploaded_files = uploaded_files[:10]
+
+    style = st.radio("選擇風格", ["🌸 日系動漫","🖌️ 水彩風","🖼️ 油畫風","👾 像素復古"])
     pixel_size = st.select_slider("像素大小（像素復古專用）", options=[4,6,8,10,12,16,20,24], value=8) if style=="👾 像素復古" else 8
     run_btn = st.button("🎨 套用濾鏡", type="primary", use_container_width=True)
+    st.markdown("---")
+    st.caption(f"已上傳：{len(uploaded_files) if uploaded_files else 0} 張")
 
-with col_r:
-    if uploaded is None:
-        st.info("請先上傳一張圖片，再選擇風格套用")
+# 主區域
+if not uploaded_files:
+    st.info("👈 請在左側上傳圖片（最多 10 張），選擇風格後按「套用濾鏡」")
+else:
+    n = len(uploaded_files)
+
+    if run_btn:
+        results = []
+        progress = st.progress(0, text="準備中...")
+
+        for i, uf in enumerate(uploaded_files):
+            progress.progress((i) / n, text=f"處理第 {i+1}/{n} 張：{uf.name}")
+            img_bgr = load_image(uf)
+            t0 = time.time()
+            result = apply_filter(img_bgr, style, pixel_size)
+            elapsed = time.time() - t0
+            tone_info = analyze_color_tone(img_bgr)
+            results.append({
+                "name": uf.name,
+                "orig": img_bgr,
+                "result": result,
+                "elapsed": elapsed,
+                "tone": tone_info["reason"]
+            })
+
+        progress.progress(1.0, text="✅ 全部完成！")
+
+        # 顯示結果
+        st.markdown(f"### 結果（共 {n} 張）")
+        for r in results:
+            with st.expander(f"📷 {r['name']}", expanded=True):
+                st.markdown(
+                    f'<span class="timing">⏱ {r["elapsed"]:.2f} 秒　｜　{r["tone"]}</span>',
+                    unsafe_allow_html=True
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("原圖")
+                    st.image(bgr2pil(r["orig"]), use_column_width=True)
+                with c2:
+                    st.caption(style)
+                    st.image(bgr2pil(r["result"]), use_column_width=True)
+                fname = r["name"].rsplit(".",1)[0]
+                st.download_button(
+                    f"⬇ 下載 {r['name']}",
+                    data=to_bytes(bgr2pil(r["result"])),
+                    file_name=f"{style.split()[1]}_{fname}.jpg",
+                    mime="image/jpeg",
+                    key=f"dl_{r['name']}"
+                )
+
+        # 批次下載 ZIP
+        if n > 1:
+            st.markdown("---")
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for r in results:
+                    fname = r["name"].rsplit(".",1)[0]
+                    img_bytes = to_bytes(bgr2pil(r["result"]))
+                    zf.writestr(f"{style.split()[1]}_{fname}.jpg", img_bytes)
+            st.download_button(
+                "📦 批次下載全部結果（ZIP）",
+                data=zip_buf.getvalue(),
+                file_name=f"{style.split()[1]}_results.zip",
+                mime="application/zip",
+                use_container_width=True
+            )
     else:
-        file_bytes = np.frombuffer(uploaded.read(), np.uint8)
-        img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        h,w = img_bgr.shape[:2]
-        if w > 512:
-            img_bgr = cv2.resize(img_bgr,(512,int(h*512/w)),interpolation=cv2.INTER_AREA)
-
-        if run_btn:
-            with st.spinner("處理中，請稍候..."):
-                t0=time.time()
-                if   style=="🌸 日系動漫": result=anime_filter(img_bgr)
-                elif style=="🖌️ 水彩風":   result=watercolor_filter(img_bgr)
-                elif style=="🖼️ 油畫風":   result=oil_filter(img_bgr)
-                else:                       result=pixel_filter(img_bgr,pixel_size)
-                elapsed=time.time()-t0
-
-            tone_info=analyze_color_tone(img_bgr)
-            st.markdown(f'<span class="timing">⏱ {elapsed:.2f} 秒　｜　{tone_info["reason"]}</span>', unsafe_allow_html=True)
-            st.markdown(" ")
-            c1,c2=st.columns(2)
-            with c1: st.caption("原圖"); st.image(bgr2pil(img_bgr),use_column_width=True)
-            with c2: st.caption(style); st.image(bgr2pil(result),use_column_width=True)
-            fname=uploaded.name.rsplit(".",1)[0]
-            st.download_button("⬇ 下載結果",data=to_bytes(bgr2pil(result)),file_name=f"{style.split()[1]}_{fname}.jpg",mime="image/jpeg",use_container_width=True)
-        else:
-            st.caption("原圖預覽")
-            st.image(bgr2pil(img_bgr), use_column_width=True)
+        # 只顯示預覽縮圖
+        st.markdown(f"### 已上傳 {n} 張圖片，選擇風格後按「套用濾鏡」")
+        cols = st.columns(min(n, 5))
+        for i, uf in enumerate(uploaded_files):
+            with cols[i % 5]:
+                img = Image.open(uf)
+                st.image(img, caption=uf.name, use_column_width=True)
 
 st.markdown("---")
 st.caption("圖片於伺服器本地處理 · 不會對外傳送")
