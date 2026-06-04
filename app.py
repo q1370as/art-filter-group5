@@ -2,7 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 import time
-import onnxruntime as ort
+
 from PIL import Image
 import io
 
@@ -19,13 +19,9 @@ st.markdown('<div class="title">🎨 多風格藝術濾鏡轉換系統</div>', u
 st.markdown('<div class="sub">第五組專題 · 指導教授：林皇辰 · 日系動漫 / 水彩 / 油畫 / 像素復古</div>', unsafe_allow_html=True)
 
 @st.cache_resource
-def load_model():
-    try:
-        return ort.InferenceSession("animegan2.onnx", providers=["CPUExecutionProvider"])
-    except:
-        return None
 
-onnx_session = load_model()
+
+
 
 def analyze_color_tone(img_bgr):
     b_ch=np.mean(img_bgr[:,:,0]); g_ch=np.mean(img_bgr[:,:,1]); r_ch=np.mean(img_bgr[:,:,2])
@@ -54,18 +50,29 @@ def apply_japanese_tone(result_bgr, tone_info):
     return cv2.addWeighted(result_bgr,0.65,glow,0.35,0)
 
 def anime_filter(img_bgr):
-    if onnx_session is None: return img_bgr
-    img_rgb=cv2.cvtColor(img_bgr,cv2.COLOR_BGR2RGB); h,w=img_rgb.shape[:2]
-    nw=(w//32)*32; nh=(h//32)*32; resized=cv2.resize(img_rgb,(nw,nh))
-    inp=resized.astype(np.float32)/127.5-1.0; inp=np.transpose(inp,(2,0,1))[np.newaxis]
-    out=onnx_session.run(["output"],{"input":inp})[0]
-    out=np.transpose(out[0],(1,2,0)); out=((out*0.5+0.5)*255).clip(0,255).astype(np.uint8)
-    result_bgr=cv2.cvtColor(out,cv2.COLOR_RGB2BGR); result_bgr=cv2.resize(result_bgr,(w,h),interpolation=cv2.INTER_LANCZOS4)
-    result_bgr=cv2.addWeighted(result_bgr,0.85,img_bgr,0.15,0)
-    tone_info=analyze_color_tone(img_bgr); result_bgr=apply_japanese_tone(result_bgr,tone_info)
-    kernel=np.array([[0,-1,0],[-1,5,-1],[0,-1,0]]); result_bgr=cv2.filter2D(result_bgr,-1,kernel)
-    hsv=cv2.cvtColor(result_bgr,cv2.COLOR_BGR2HSV).astype(np.float32); hsv[:,:,1]=np.clip(hsv[:,:,1]*1.3,0,255)
-    return cv2.cvtColor(hsv.astype(np.uint8),cv2.COLOR_HSV2BGR)
+    # 純 OpenCV 動漫風：雙邊濾波 + 色彩量化 + 邊緣
+    smooth = img_bgr.copy()
+    for _ in range(2):
+        smooth = cv2.bilateralFilter(smooth, d=9, sigmaColor=75, sigmaSpace=75)
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    blur_gray = cv2.medianBlur(gray, 7)
+    edges = cv2.adaptiveThreshold(
+        blur_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY, blockSize=9, C=4
+    )
+    edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+    data = smooth.reshape((-1, 3)).astype(np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+    _, labels, centers = cv2.kmeans(data, 6, None, criteria, 4, cv2.KMEANS_RANDOM_CENTERS)
+    quantized = centers[labels.flatten()].reshape(smooth.shape).astype(np.uint8)
+    result = cv2.bitwise_and(quantized, edges_bgr)
+    tone_info = analyze_color_tone(img_bgr)
+    result = apply_japanese_tone(result, tone_info)
+    kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
+    result = cv2.filter2D(result, -1, kernel)
+    hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:,:,1] = np.clip(hsv[:,:,1]*1.3, 0, 255)
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
 def watercolor_filter(img_bgr):
     smooth=img_bgr.copy()
