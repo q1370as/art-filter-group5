@@ -17,7 +17,7 @@ st.markdown("""
 </style>""", unsafe_allow_html=True)
 
 st.markdown('<div class="title">🎨 多風格藝術濾鏡轉換系統</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub">第五組專題 · 指導教授：林皇辰 · 日系動漫 / 水彩 / 油畫 / 像素復古</div>', unsafe_allow_html=True)
+
 
 # ════════════════════════════
 # 濾鏡函式
